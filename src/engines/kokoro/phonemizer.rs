@@ -171,8 +171,12 @@ fn phonemize_segments_batch(
     Ok(lines.iter().map(|line| ipa_to_ids(line, vocab)).collect())
 }
 
+fn espeak_bin() -> String {
+    std::env::var("ESPEAK_NG_PATH").unwrap_or_else(|_| "espeak-ng".to_string())
+}
+
 fn run_espeak(input: &str, lang: &str) -> Result<String, KokoroError> {
-    let mut child = Command::new("espeak-ng")
+    let mut child = Command::new(espeak_bin())
         .args(["--ipa", "--stdin", "-q", "-v", lang])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -298,7 +302,7 @@ mod tests {
     #[test]
     fn espeak_output_is_stable_with_or_without_trailing_newline() {
         // Skip when espeak-ng is unavailable in the execution environment.
-        if Command::new("espeak-ng").arg("--version").output().is_err() {
+        if Command::new(super::espeak_bin()).arg("--version").output().is_err() {
             return;
         }
 
@@ -313,7 +317,7 @@ mod tests {
 
     #[test]
     fn phonemize_keeps_terminal_schwa_for_america() {
-        if Command::new("espeak-ng").arg("--version").output().is_err() {
+        if Command::new(super::espeak_bin()).arg("--version").output().is_err() {
             return;
         }
 
