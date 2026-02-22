@@ -8,7 +8,7 @@ use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
 use ort::value::TensorRef;
 
-use super::phonemizer::{phonemize, voice_lang};
+use super::phonemizer::{phonemize, voice_lang, EspeakConfig};
 use super::voices::VoiceStore;
 
 /// Maximum number of phoneme tokens per chunk (before padding).
@@ -125,9 +125,10 @@ impl KokoroModel {
         voice_name: &str,
         speed: f32,
         style_idx_override: Option<usize>,
+        espeak: &EspeakConfig<'_>,
     ) -> Result<Vec<f32>, KokoroError> {
         let lang = voice_lang(voice_name);
-        let ids = phonemize(text, lang, &self.vocab)?;
+        let ids = phonemize(text, lang, &self.vocab, espeak)?;
 
         if ids.is_empty() {
             log::warn!("No phoneme tokens produced for text: {text:?}");

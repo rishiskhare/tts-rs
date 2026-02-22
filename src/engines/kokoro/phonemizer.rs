@@ -1,9 +1,22 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::Write;
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 use super::model::KokoroError;
+
+/// Configuration for locating the espeak-ng binary and its data directory.
+///
+/// When paths are `None`, falls back to `"espeak-ng"` on PATH with its
+/// compiled-in default data directory.
+#[derive(Debug, Clone, Default)]
+pub struct EspeakConfig<'a> {
+    /// Path to the espeak-ng binary. Falls back to `"espeak-ng"` on PATH.
+    pub bin_path: Option<&'a Path>,
+    /// Path to the espeak-ng-data directory. When set, passed via `--path`.
+    pub data_path: Option<&'a Path>,
+}
 
 /// Map a voice name prefix to an espeak-ng language code.
 ///
@@ -39,6 +52,7 @@ pub fn phonemize(
     text: &str,
     lang: &str,
     vocab: &HashMap<char, i64>,
+    espeak: &EspeakConfig<'_>,
 ) -> Result<Vec<i64>, KokoroError> {
     let parts = split_text_parts(text);
     if parts.is_empty() {
@@ -56,7 +70,7 @@ pub fn phonemize(
     let segment_ids = if text_segments.is_empty() {
         Vec::new()
     } else {
-        phonemize_segments_batch(&text_segments, lang, vocab)?
+        phonemize_segments_batch(&text_segments, lang, vocab, espeak)?
     };
 
     let mut ids = Vec::new();
@@ -151,9 +165,10 @@ fn phonemize_segments_batch(
     segments: &[&str],
     lang: &str,
     vocab: &HashMap<char, i64>,
+    espeak: &EspeakConfig<'_>,
 ) -> Result<Vec<Vec<i64>>, KokoroError> {
     let batched_input = segments.join("\n");
-    let output = run_espeak(&batched_input, lang)?;
+    let output = run_espeak(&batched_input, lang, espeak)?;
     let lines: Vec<&str> = output.lines().collect();
 
     // espeak-ng should emit one line per input line for stdin mode.
@@ -162,7 +177,7 @@ fn phonemize_segments_batch(
         return segments
             .iter()
             .map(|segment| {
-                let output = run_espeak(segment, lang)?;
+                let output = run_espeak(segment, lang, espeak)?;
                 Ok(ipa_to_ids(&output, vocab))
             })
             .collect();
@@ -171,13 +186,17 @@ fn phonemize_segments_batch(
     Ok(lines.iter().map(|line| ipa_to_ids(line, vocab)).collect())
 }
 
-fn espeak_bin() -> String {
-    std::env::var("ESPEAK_NG_PATH").unwrap_or_else(|_| "espeak-ng".to_string())
-}
-
-fn run_espeak(input: &str, lang: &str) -> Result<String, KokoroError> {
-    let mut child = Command::new(espeak_bin())
-        .args(["--ipa", "--stdin", "-q", "-v", lang])
+fn run_espeak(input: &str, lang: &str, espeak: &EspeakConfig<'_>) -> Result<String, KokoroError> {
+    let bin = espeak
+        .bin_path
+        .map(|p| p.as_os_str().to_owned())
+        .unwrap_or_else(|| std::ffi::OsString::from("espeak-ng"));
+    let mut cmd = Command::new(&bin);
+    cmd.args(["--ipa", "--stdin", "-q", "-v", lang]);
+    if let Some(data_path) = espeak.data_path {
+        cmd.arg("--path").arg(data_path);
+    }
+    let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -243,10 +262,18 @@ fn ipa_to_ids(ipa: &str, vocab: &HashMap<char, i64>) -> Vec<i64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        canonicalize_espeak_stdin_payload, phonemize, run_espeak, split_text_parts, TextPart,
+        canonicalize_espeak_stdin_payload, phonemize, run_espeak, split_text_parts, EspeakConfig,
+        TextPart,
     };
     use crate::engines::kokoro::vocab::hardcoded_vocab;
     use std::process::Command;
+
+    fn espeak_available() -> bool {
+        Command::new("espeak-ng")
+            .arg("--version")
+            .output()
+            .is_ok()
+    }
 
     #[test]
     fn splits_text_and_punctuation_parts() {
@@ -301,13 +328,15 @@ mod tests {
 
     #[test]
     fn espeak_output_is_stable_with_or_without_trailing_newline() {
-        // Skip when espeak-ng is unavailable in the execution environment.
-        if Command::new(super::espeak_bin()).arg("--version").output().is_err() {
+        if !espeak_available() {
             return;
         }
 
-        let without_newline = run_espeak("America", "en-us").expect("espeak should succeed");
-        let with_newline = run_espeak("America\n", "en-us").expect("espeak should succeed");
+        let cfg = EspeakConfig::default();
+        let without_newline =
+            run_espeak("America", "en-us", &cfg).expect("espeak should succeed");
+        let with_newline =
+            run_espeak("America\n", "en-us", &cfg).expect("espeak should succeed");
         assert_eq!(
             without_newline.trim(),
             with_newline.trim(),
@@ -317,12 +346,14 @@ mod tests {
 
     #[test]
     fn phonemize_keeps_terminal_schwa_for_america() {
-        if Command::new(super::espeak_bin()).arg("--version").output().is_err() {
+        if !espeak_available() {
             return;
         }
 
         let vocab = hardcoded_vocab();
-        let ids = phonemize("America", "en-us", &vocab).expect("phonemize should succeed");
+        let cfg = EspeakConfig::default();
+        let ids =
+            phonemize("America", "en-us", &vocab, &cfg).expect("phonemize should succeed");
         let schwa_id = *vocab
             .get(&'ə')
             .expect("hardcoded vocab should include schwa");

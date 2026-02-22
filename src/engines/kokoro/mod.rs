@@ -88,3 +88,4 @@ pub mod voices;
 
 pub use engine::{KokoroEngine, KokoroInferenceParams, KokoroModelParams};
 pub use model::KokoroError;
+pub use phonemizer::EspeakConfig;
