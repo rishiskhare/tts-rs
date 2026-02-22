@@ -106,7 +106,7 @@ fn parse_npy(data: &[u8], name: &str) -> Result<Vec<[f32; 256]>, KokoroError> {
     }
 
     let float_data = &data[data_offset..];
-    if float_data.len() % 4 != 0 {
+    if !float_data.len().is_multiple_of(4) {
         return Err(KokoroError::VoiceParse(format!(
             "{name}: float data length {} is not a multiple of 4",
             float_data.len()
@@ -114,7 +114,7 @@ fn parse_npy(data: &[u8], name: &str) -> Result<Vec<[f32; 256]>, KokoroError> {
     }
 
     let n_floats = float_data.len() / 4;
-    if n_floats % 256 != 0 {
+    if !n_floats.is_multiple_of(256) {
         return Err(KokoroError::VoiceParse(format!(
             "{name}: float count {n_floats} is not a multiple of 256 (style vector dim)"
         )));
@@ -125,9 +125,9 @@ fn parse_npy(data: &[u8], name: &str) -> Result<Vec<[f32; 256]>, KokoroError> {
 
     for i in 0..n_styles {
         let mut vec = [0f32; 256];
-        for j in 0..256 {
+        for (j, slot) in vec.iter_mut().enumerate() {
             let offset = (i * 256 + j) * 4;
-            vec[j] = f32::from_le_bytes([
+            *slot = f32::from_le_bytes([
                 float_data[offset],
                 float_data[offset + 1],
                 float_data[offset + 2],

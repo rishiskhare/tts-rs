@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use crate::{SynthesisEngine, SynthesisResult};
 
 use super::model::{KokoroError, KokoroModel, SAMPLE_RATE};
+use super::phonemizer::EspeakConfig;
 
 /// Parameters for configuring Kokoro model loading.
 #[derive(Debug, Clone, Default)]
@@ -19,15 +20,6 @@ pub struct KokoroModelParams {
     /// Always write to a writable location (e.g. app data dir); bundled resource
     /// directories may be read-only.
     pub optimized_model_cache_path: Option<PathBuf>,
-    /// Path to the `espeak-ng` binary.
-    ///
-    /// When `None`, falls back to `ESPEAK_NG_PATH` env var, then `"espeak-ng"` on PATH.
-    pub espeak_ng_path: Option<PathBuf>,
-    /// Path to the `espeak-ng-data` directory.
-    ///
-    /// Passed to espeak-ng via `--path` so it can find phoneme rules and language
-    /// dictionaries.  When `None`, espeak-ng uses its compiled-in default.
-    pub espeak_ng_data_path: Option<PathBuf>,
 }
 
 /// Parameters for configuring a Kokoro synthesis request.
@@ -59,20 +51,33 @@ impl Default for KokoroInferenceParams {
 /// # Quick Start
 ///
 /// ```rust,no_run
-/// use transcribe_rs::{SynthesisEngine, engines::kokoro::KokoroEngine};
+/// use tts_rs::{SynthesisEngine, engines::kokoro::KokoroEngine};
 /// use std::path::PathBuf;
 ///
+/// // Uses system espeak-ng from PATH
 /// let mut engine = KokoroEngine::new();
 /// engine.load_model(&PathBuf::from("models/kokoro"))?;
 /// let result = engine.synthesize("Hello, world!", None)?;
-/// println!("{} samples at {}Hz", result.samples.len(), result.sample_rate);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+///
+/// # Bundled espeak-ng
+///
+/// ```rust,no_run
+/// use tts_rs::engines::kokoro::KokoroEngine;
+/// use std::path::PathBuf;
+///
+/// // Point to a bundled espeak-ng binary and data directory
+/// let engine = KokoroEngine::with_espeak(
+///     Some(PathBuf::from("/app/resources/espeak-ng/espeak-ng")),
+///     Some(PathBuf::from("/app/resources/espeak-ng-data")),
+/// );
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub struct KokoroEngine {
     model: Option<KokoroModel>,
     model_path: Option<PathBuf>,
-    espeak_ng_path: Option<PathBuf>,
-    espeak_ng_data_path: Option<PathBuf>,
+    espeak: EspeakConfig,
 }
 
 impl Default for KokoroEngine {
@@ -82,13 +87,27 @@ impl Default for KokoroEngine {
 }
 
 impl KokoroEngine {
-    /// Create a new, unloaded Kokoro engine instance.
+    /// Create a new engine that uses `espeak-ng` from PATH.
     pub fn new() -> Self {
         Self {
             model: None,
             model_path: None,
-            espeak_ng_path: None,
-            espeak_ng_data_path: None,
+            espeak: EspeakConfig::default(),
+        }
+    }
+
+    /// Create a new engine with explicit espeak-ng binary and data paths.
+    ///
+    /// Use this when bundling espeak-ng with your application. Either path
+    /// can be `None` to fall back to the system default.
+    pub fn with_espeak(
+        bin_path: Option<PathBuf>,
+        data_path: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            model: None,
+            model_path: None,
+            espeak: EspeakConfig { bin_path, data_path },
         }
     }
 
@@ -123,8 +142,6 @@ impl SynthesisEngine for KokoroEngine {
         )?;
         self.model = Some(model);
         self.model_path = Some(model_path.to_path_buf());
-        self.espeak_ng_path = params.espeak_ng_path;
-        self.espeak_ng_data_path = params.espeak_ng_data_path;
         Ok(())
     }
 
@@ -141,12 +158,8 @@ impl SynthesisEngine for KokoroEngine {
         let model = self.model.as_mut().ok_or(KokoroError::ModelNotLoaded)?;
 
         let p = params.unwrap_or_default();
-        let espeak_config = super::phonemizer::EspeakConfig {
-            bin_path: self.espeak_ng_path.as_deref(),
-            data_path: self.espeak_ng_data_path.as_deref(),
-        };
         let samples =
-            model.synthesize_text(text, &p.voice, p.speed, p.style_index, &espeak_config)?;
+            model.synthesize_text(text, &p.voice, p.speed, p.style_index, &self.espeak)?;
 
         Ok(SynthesisResult {
             samples,

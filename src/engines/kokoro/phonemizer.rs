@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::Write;
-use std::path::Path;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use super::model::KokoroError;
@@ -11,11 +11,11 @@ use super::model::KokoroError;
 /// When paths are `None`, falls back to `"espeak-ng"` on PATH with its
 /// compiled-in default data directory.
 #[derive(Debug, Clone, Default)]
-pub struct EspeakConfig<'a> {
+pub struct EspeakConfig {
     /// Path to the espeak-ng binary. Falls back to `"espeak-ng"` on PATH.
-    pub bin_path: Option<&'a Path>,
+    pub bin_path: Option<PathBuf>,
     /// Path to the espeak-ng-data directory. When set, passed via `--path`.
-    pub data_path: Option<&'a Path>,
+    pub data_path: Option<PathBuf>,
 }
 
 /// Map a voice name prefix to an espeak-ng language code.
@@ -52,7 +52,7 @@ pub fn phonemize(
     text: &str,
     lang: &str,
     vocab: &HashMap<char, i64>,
-    espeak: &EspeakConfig<'_>,
+    espeak: &EspeakConfig,
 ) -> Result<Vec<i64>, KokoroError> {
     let parts = split_text_parts(text);
     if parts.is_empty() {
@@ -165,7 +165,7 @@ fn phonemize_segments_batch(
     segments: &[&str],
     lang: &str,
     vocab: &HashMap<char, i64>,
-    espeak: &EspeakConfig<'_>,
+    espeak: &EspeakConfig,
 ) -> Result<Vec<Vec<i64>>, KokoroError> {
     let batched_input = segments.join("\n");
     let output = run_espeak(&batched_input, lang, espeak)?;
@@ -186,15 +186,23 @@ fn phonemize_segments_batch(
     Ok(lines.iter().map(|line| ipa_to_ids(line, vocab)).collect())
 }
 
-fn run_espeak(input: &str, lang: &str, espeak: &EspeakConfig<'_>) -> Result<String, KokoroError> {
+fn run_espeak(input: &str, lang: &str, espeak: &EspeakConfig) -> Result<String, KokoroError> {
     let bin = espeak
         .bin_path
+        .as_deref()
         .map(|p| p.as_os_str().to_owned())
         .unwrap_or_else(|| std::ffi::OsString::from("espeak-ng"));
     let mut cmd = Command::new(&bin);
     cmd.args(["--ipa", "--stdin", "-q", "-v", lang]);
-    if let Some(data_path) = espeak.data_path {
+    if let Some(data_path) = espeak.data_path.as_deref() {
         cmd.arg("--path").arg(data_path);
+    }
+    // When using a bundled binary, shared libraries (libespeak-ng.so,
+    // libpcaudio.so) are placed next to the binary.  On Linux, the dynamic
+    // linker needs LD_LIBRARY_PATH to find them (RPATH may not be set).
+    #[cfg(target_os = "linux")]
+    if let Some(bin_dir) = espeak.bin_path.as_deref().and_then(|p| p.parent()) {
+        cmd.env("LD_LIBRARY_PATH", bin_dir);
     }
     let mut child = cmd
         .stdin(Stdio::piped())

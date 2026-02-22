@@ -125,7 +125,7 @@ impl KokoroModel {
         voice_name: &str,
         speed: f32,
         style_idx_override: Option<usize>,
-        espeak: &EspeakConfig<'_>,
+        espeak: &EspeakConfig,
     ) -> Result<Vec<f32>, KokoroError> {
         let lang = voice_lang(voice_name);
         let ids = phonemize(text, lang, &self.vocab, espeak)?;
